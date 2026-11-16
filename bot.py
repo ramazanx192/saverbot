@@ -81,7 +81,7 @@ def download_pinterest_image(url: str) -> str:
         raise ValueError("Не удалось найти картинку пина на странице.")
 
     img_url = meta["content"]
-    orig_url = re.sub(r'i\.pinimg\.com/[^/]+/', 'i.pinimg\.com/originals/', img_url)
+    orig_url = re.sub(r'i\.pinimg\.com/[^/]+/', 'i.pinimg.com/originals/', img_url)
     img_resp = requests.get(orig_url, headers=HEADERS, timeout=20)
 
     if img_resp.status_code == 200:
@@ -145,160 +145,13 @@ def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
         r = requests.get("https://www.tikwm.com/api/", params={"url": clean_url, "hd": 1}, headers=tikwm_headers, timeout=15)
         if r.status_code == 200 and r.text.strip().startswith("{"):
             data = r.json().get("data", {})
-            images = data.get("images")import asyncio
-import json
-import os
-import re
-import uuid
-import requests
-from bs4 import BeautifulSoup
-from aiohttp import web
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
-from aiogram.utils.media_group import MediaGroupBuilder
-import yt_dlp
-
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_ОТ_BOTFATHER")
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-
-os.makedirs("downloads", exist_ok=True)
-
-SUPPORTED_DOMAINS = (
-    "tiktok.com",
-    "instagram.com",
-    "instagr.am",
-    "pinterest.com",
-    "pinterest.ru",
-    "pin.it",
-)
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-
-def extract_url(text: str) -> str | None:
-    for word in text.split():
-        if any(domain in word.lower() for domain in SUPPORTED_DOMAINS):
-            return word.strip()
-    return None
-
-
-def clean_tiktok_url(url: str) -> str:
-    """Убирает лишние трекинг-параметры (?_r=1...) из длинных ссылок TikTok."""
-    if "/photo/" in url or "/video/" in url:
-        return url.split("?")[0]
-    return url
-
-
-def download_video_ytdlp(url: str) -> str:
-    """Скачивает готовый mp4 со звуком (не требует FFmpeg на сервере)."""
-    file_id = str(uuid.uuid4())
-    output_path = f"downloads/{file_id}.mp4"
-
-    ydl_opts = {
-        "outtmpl": output_path,
-        "format": "best[ext=mp4]/best",
-        "quiet": True,
-        "no_warnings": True,
-        "http_headers": HEADERS,
-    }
-
-    if os.path.exists("cookies.txt"):
-        ydl_opts["cookiefile"] = "cookies.txt"
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-
-    return output_path
-
-
-def download_pinterest_image(url: str) -> str:
-    """Вытаскивает картинку пина в оригинальном качестве."""
-    resp = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=20)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    meta = soup.find("meta", property="og:image")
-    if not meta or not meta.get("content"):
-        raise ValueError("Не удалось найти картинку пина на странице.")
-
-    img_url = meta["content"]
-    orig_url = re.sub(r'i\.pinimg\.com/[^/]+/', 'i.pinimg.com/originals/', img_url)
-    img_resp = requests.get(orig_url, headers=HEADERS, timeout=20)
-
-    if img_resp.status_code == 200:
-        final_url = orig_url
-        img_data = img_resp.content
-    else:
-        final_url = img_url
-        img_data = requests.get(final_url, headers=HEADERS, timeout=20).content
-
-    ext = final_url.split(".")[-1].split("?")[0]
-    if ext not in ("jpg", "jpeg", "png", "webp"):
-        ext = "jpg"
-
-    file_path = f"downloads/{uuid.uuid4()}.{ext}"
-    with open(file_path, "wb") as f:
-        f.write(img_data)
-
-    return file_path
-
-
-def save_media_list(image_urls: list[str], music_url: str | None, session=None) -> tuple[list[str], str | None]:
-    """Скачивает список картинок и аудио на диск."""
-    fetcher = session or requests
-    saved_images = []
-    for img_url in image_urls:
-        try:
-            r = fetcher.get(img_url, headers=HEADERS, timeout=20)
-            if r.status_code == 200 and len(r.content) > 500:
-                img_path = f"downloads/{uuid.uuid4()}.jpg"
-                with open(img_path, "wb") as f:
-                    f.write(r.content)
-                saved_images.append(img_path)
-        except Exception:
-            continue
-
-    audio_path = None
-    if music_url and saved_images:
-        try:
-            ar = fetcher.get(music_url, headers=HEADERS, timeout=20)
-            if ar.status_code == 200 and len(ar.content) > 1000:
-                audio_path = f"downloads/{uuid.uuid4()}.mp3"
-                with open(audio_path, "wb") as f:
-                    f.write(ar.content)
-        except Exception:
-            audio_path = None
-
-    return saved_images, audio_path
-
-
-def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
-    """Тройной каскад для скачивания фото-постов и альбомов из TikTok."""
-    clean_url = clean_tiktok_url(url)
-
-    # Способ 1: TikWM API (пробуем GET с нормальным Referer)
-    try:
-        tikwm_headers = {
-            **HEADERS,
-            "Referer": "https://www.tikwm.com/",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-        }
-        r = requests.get("https://www.tikwm.com/api/", params={"url": clean_url, "hd": 1}, headers=tikwm_headers, timeout=15)
-        if r.status_code == 200 and r.text.strip().startswith("{"):
-            data = r.json().get("data", {})
             images = data.get("images")
             if images:
                 return save_media_list(images, data.get("music"))
     except Exception:
         pass
 
-    # Способ 2: Прямой парсинг страницы TikTok (с чистой ссылкой и сессией)
+    # Способ 2: Прямой парсинг страницы TikTok
     try:
         session = requests.Session()
         resp = session.get(clean_url, headers=HEADERS, allow_redirects=True, timeout=20)
@@ -324,12 +177,10 @@ def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
     except Exception:
         pass
 
-    # Способ 3: Поиск ссылок на слайды через regex в HTML (на случай другой разметки)
+    # Способ 3: Поиск ссылок на слайды через regex в HTML
     try:
         resp = requests.get(clean_url, headers=HEADERS, allow_redirects=True, timeout=20)
-        # Ищем прямые CDN-ссылки на фото слайдшоу TikTok
         found = re.findall(r'https://p16-[^"\'\\]+\.(?:jpeg|jpg|webp)[^"\'\\]*', resp.text)
-        # Фильтруем аватарки (обычно содержат avt- или c100x100)
         slides = []
         seen = set()
         for link in found:
@@ -443,4 +294,25 @@ async def send_checked_video(message: types.Message, status_msg: types.Message, 
     await status_msg.delete()
 
 
-async def health_check(request
+async def health_check(request):
+    return web.Response(text="Bot is alive!")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+
+async def main():
+    await start_web_server()
+    print("Бот и веб-сервер запущены...")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
