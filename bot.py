@@ -10,7 +10,6 @@ from aiogram.filters import CommandStart
 from aiogram.utils.media_group import MediaGroupBuilder
 import yt_dlp
 
-# Токен берётся из переменных окружения сервера (или вставь свой в кавычки вторым аргументом)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_ОТ_BOTFATHER")
 
 bot = Bot(token=BOT_TOKEN)
@@ -63,7 +62,7 @@ def download_video_ytdlp(url: str) -> str:
 
 def download_pinterest_image(url: str) -> str:
     """Вытаскивает картинку пина в оригинальном качестве."""
-    resp = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=15)
+    resp = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=20)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -73,14 +72,14 @@ def download_pinterest_image(url: str) -> str:
 
     img_url = meta["content"]
     orig_url = re.sub(r'i\.pinimg\.com/[^/]+/', 'i.pinimg.com/originals/', img_url)
-    img_resp = requests.get(orig_url, headers=HEADERS, timeout=15)
+    img_resp = requests.get(orig_url, headers=HEADERS, timeout=20)
 
     if img_resp.status_code == 200:
         final_url = orig_url
         img_data = img_resp.content
     else:
         final_url = img_url
-        img_data = requests.get(final_url, headers=HEADERS, timeout=15).content
+        img_data = requests.get(final_url, headers=HEADERS, timeout=20).content
 
     ext = final_url.split(".")[-1].split("?")[0]
     if ext not in ("jpg", "jpeg", "png", "webp"):
@@ -94,9 +93,12 @@ def download_pinterest_image(url: str) -> str:
 
 
 def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
-    """Скачивает фото-альбом и аудио из TikTok."""
-    api_url = "https://www.tikwm.com/api/"
-    resp = requests.post(api_url, data={"url": url}, headers=HEADERS, timeout=15).json()
+    """Скачивает фото-альбом и аудио из TikTok. Если API тормозит — не роняет бота."""
+    try:
+        api_url = "https://www.tikwm.com/api/"
+        resp = requests.post(api_url, data={"url": url}, headers=HEADERS, timeout=25).json()
+    except Exception:
+        return [], None
 
     if resp.get("code") != 0:
         return [], None
@@ -108,7 +110,7 @@ def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
 
     saved_images = []
     for img_url in images:
-        img_bytes = requests.get(img_url, headers=HEADERS, timeout=15).content
+        img_bytes = requests.get(img_url, headers=HEADERS, timeout=25).content
         img_path = f"downloads/{uuid.uuid4()}.jpg"
         with open(img_path, "wb") as f:
             f.write(img_bytes)
@@ -118,7 +120,7 @@ def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
     music_url = data.get("music")
     if music_url:
         try:
-            audio_bytes = requests.get(music_url, headers=HEADERS, timeout=15).content
+            audio_bytes = requests.get(music_url, headers=HEADERS, timeout=25).content
             audio_path = f"downloads/{uuid.uuid4()}.mp3"
             with open(audio_path, "wb") as f:
                 f.write(audio_bytes)
@@ -220,7 +222,6 @@ async def send_checked_video(message: types.Message, status_msg: types.Message, 
     await status_msg.delete()
 
 
-# --- МИКРО-СЕРВЕР ДЛЯ ОБЛАЧНОГО ХОСТИНГА ---
 async def health_check(request):
     return web.Response(text="Bot is alive!")
 
