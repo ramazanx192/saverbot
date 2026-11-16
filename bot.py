@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import uuid
 import requests
 from bs4 import BeautifulSoup
@@ -9,6 +10,9 @@ from aiogram.filters import CommandStart
 import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_ОТ_BOTFATHER")
+
+# Вставь сюда file_id стикера, который выдал @idstickerbot
+LOADING_STICKER_ID = "CAACAgIAAxkBAAESNx5q-0Qmr98xPFs5eFgU2hbd2bfT_AACPJwAApKsKUtieQABGFB4MGI9BA"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -99,6 +103,20 @@ def download_pinterest_image(url: str) -> str:
     return file_path
 
 
+async def delete_loading_ui(status_msg: types.Message, sticker_msg: types.Message | None):
+    """Удаляет и сообщение 'Загружаю...', и стикер."""
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    if sticker_msg:
+        try:
+            await sticker_msg.delete()
+        except Exception:
+            pass
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -117,6 +135,13 @@ async def handle_link(message: types.Message):
         return
 
     status_msg = await message.answer("⏳ Загружаю...")
+    sticker_msg = None
+    if LOADING_STICKER_ID and LOADING_STICKER_ID != "ВСТАВЬ_СЮДА_FILE_ID_СТИКЕРА":
+        try:
+            sticker_msg = await message.answer_sticker(sticker=LOADING_STICKER_ID)
+        except Exception:
+            sticker_msg = None
+
     files_to_clean = []
 
     try:
@@ -124,30 +149,41 @@ async def handle_link(message: types.Message):
 
         if "tiktok.com" in lower_url:
             if "/photo/" in lower_url:
+                if sticker_msg:
+                    try:
+                        await sticker_msg.delete()
+                    except Exception:
+                        pass
                 await status_msg.edit_text("❌ TikTok защитил фото-посты от скачивания с облачных серверов. Закидывай видео — их качает на ура!")
                 return
 
             video_path = await asyncio.to_thread(download_video_ytdlp, clean_tiktok_url(url))
             files_to_clean.append(video_path)
-            await send_checked_video(message, status_msg, video_path)
+            await send_checked_video(message, status_msg, sticker_msg, video_path)
 
         elif any(d in lower_url for d in ("pinterest.com", "pinterest.ru", "pin.it")):
             try:
                 video_path = await asyncio.to_thread(download_video_ytdlp, url)
                 files_to_clean.append(video_path)
-                await send_checked_video(message, status_msg, video_path)
+                await send_checked_video(message, status_msg, sticker_msg, video_path)
             except Exception:
                 img_path = await asyncio.to_thread(download_pinterest_image, url)
                 files_to_clean.append(img_path)
                 await message.answer_photo(photo=types.FSInputFile(img_path))
-                await status_msg.delete()
+                await delete_loading_ui(status_msg, sticker_msg)
 
         else:
             video_path = await asyncio.to_thread(download_video_ytdlp, url)
             files_to_clean.append(video_path)
-            await send_checked_video(message, status_msg, video_path)
+            await send_checked_video(message, status_msg, sticker_msg, video_path)
 
     except Exception as e:
+        if sticker_msg:
+            try:
+                await sticker_msg.delete()
+            except Exception:
+                pass
+
         error_text = str(e).lower()
         if "login required" in error_text or "cookies" in error_text:
             await status_msg.edit_text("❌ Instagram требует авторизацию для этого поста.")
@@ -163,14 +199,24 @@ async def handle_link(message: types.Message):
                     pass
 
 
-async def send_checked_video(message: types.Message, status_msg: types.Message, video_path: str):
+async def send_checked_video(
+    message: types.Message,
+    status_msg: types.Message,
+    sticker_msg: types.Message | None,
+    video_path: str,
+):
     file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
     if file_size_mb > 49.5:
+        if sticker_msg:
+            try:
+                await sticker_msg.delete()
+            except Exception:
+                pass
         await status_msg.edit_text(f"❌ Видео весит {file_size_mb:.1f} МБ (лимит Telegram — 50 МБ).")
         return
 
     await message.answer_video(video=types.FSInputFile(video_path))
-    await status_msg.delete()
+    await delete_loading_ui(status_msg, sticker_msg)
 
 
 async def health_check(request):
