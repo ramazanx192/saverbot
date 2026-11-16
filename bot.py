@@ -48,6 +48,23 @@ def clean_tiktok_url(url: str) -> str:
     return url
 
 
+def extract_tiktok_id(url: str) -> str | None:
+    """Извлекает числовой ID поста из ссылки TikTok."""
+    clean = clean_tiktok_url(url)
+    match = re.search(r'/(?:video|photo)/(\d+)', clean)
+    if match:
+        return match.group(1)
+
+    try:
+        r = requests.head(url, headers=HEADERS, allow_redirects=True, timeout=15)
+        match = re.search(r'/(?:video|photo)/(\d+)', r.url)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return None
+
+
 def download_video_ytdlp(url: str) -> str:
     """Скачивает готовый mp4 со звуком (не требует FFmpeg на сервере)."""
     file_id = str(uuid.uuid4())
@@ -132,10 +149,36 @@ def save_media_list(image_urls: list[str], music_url: str | None, session=None) 
 
 
 def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
-    """Тройной каскад для скачивания фото-постов и альбомов из TikTok."""
+    """Каскад из мобильного API и запасных методов для скачивания фото из TikTok."""
     clean_url = clean_tiktok_url(url)
+    aweme_id = extract_tiktok_id(clean_url)
 
-    # Способ 1: TikWM API
+    # Способ 1: Официальный мобильный API TikTok по ID поста
+    if aweme_id:
+        try:
+            mobile_headers = {
+                "User-Agent": "com.zhiliaoapp.musically/2023501030 (Linux; U; Android 13; en_US; Pixel 7; Build/TQ3A.230805.001; Cronet/58.0.2991.0)",
+            }
+            api_url = f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id={aweme_id}"
+            r = requests.get(api_url, headers=mobile_headers, timeout=15)
+            if r.status_code == 200 and r.text.strip().startswith("{"):
+                aweme_list = r.json().get("aweme_list", [])
+                for item in aweme_list:
+                    if str(item.get("aweme_id")) == str(aweme_id):
+                        images_data = item.get("image_post_info", {}).get("images", [])
+                        img_urls = []
+                        for img_obj in images_data:
+                            url_list = img_obj.get("display_image", {}).get("url_list", [])
+                            if url_list:
+                                img_urls.append(url_list[0])
+                        if img_urls:
+                            music_urls = item.get("music", {}).get("play_url", {}).get("url_list", [])
+                            music_url = music_urls[0] if music_urls else None
+                            return save_media_list(img_urls, music_url)
+        except Exception:
+            pass
+
+    # Способ 2: TikWM API
     try:
         tikwm_headers = {
             **HEADERS,
@@ -151,7 +194,7 @@ def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
     except Exception:
         pass
 
-    # Способ 2: Прямой парсинг страницы TikTok
+    # Способ 3: Прямой парсинг HTML
     try:
         session = requests.Session()
         resp = session.get(clean_url, headers=HEADERS, allow_redirects=True, timeout=20)
@@ -174,24 +217,6 @@ def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
             if img_urls:
                 music_url = item_struct.get("music", {}).get("playUrl")
                 return save_media_list(img_urls, music_url, session=session)
-    except Exception:
-        pass
-
-    # Способ 3: Поиск ссылок на слайды через regex в HTML
-    try:
-        resp = requests.get(clean_url, headers=HEADERS, allow_redirects=True, timeout=20)
-        found = re.findall(r'https://p16-[^"\'\\]+\.(?:jpeg|jpg|webp)[^"\'\\]*', resp.text)
-        slides = []
-        seen = set()
-        for link in found:
-            clean_link = link.encode().decode("unicode_escape")
-            if "avt-" not in clean_link and "100x100" not in clean_link:
-                base = clean_link.split("?")[0]
-                if base not in seen:
-                    seen.add(base)
-                    slides.append(clean_link)
-        if slides:
-            return save_media_list(slides, None)
     except Exception:
         pass
 
