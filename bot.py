@@ -1,14 +1,11 @@
 import asyncio
-import json
 import os
-import re
 import uuid
 import requests
 from bs4 import BeautifulSoup
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
-from aiogram.utils.media_group import MediaGroupBuilder
 import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_ОТ_BOTFATHER")
@@ -48,25 +45,8 @@ def clean_tiktok_url(url: str) -> str:
     return url
 
 
-def extract_tiktok_id(url: str) -> str | None:
-    """Извлекает числовой ID поста из ссылки TikTok."""
-    clean = clean_tiktok_url(url)
-    match = re.search(r'/(?:video|photo)/(\d+)', clean)
-    if match:
-        return match.group(1)
-
-    try:
-        r = requests.head(url, headers=HEADERS, allow_redirects=True, timeout=15)
-        match = re.search(r'/(?:video|photo)/(\d+)', r.url)
-        if match:
-            return match.group(1)
-    except Exception:
-        pass
-    return None
-
-
 def download_video_ytdlp(url: str) -> str:
-    """Скачивает готовый mp4 со звуком (не требует FFmpeg на сервере)."""
+    """Скачивает готовый mp4 со звуком."""
     file_id = str(uuid.uuid4())
     output_path = f"downloads/{file_id}.mp4"
 
@@ -119,115 +99,11 @@ def download_pinterest_image(url: str) -> str:
     return file_path
 
 
-def save_media_list(image_urls: list[str], music_url: str | None, session=None) -> tuple[list[str], str | None]:
-    """Скачивает список картинок и аудио на диск."""
-    fetcher = session or requests
-    saved_images = []
-    for img_url in image_urls:
-        try:
-            r = fetcher.get(img_url, headers=HEADERS, timeout=20)
-            if r.status_code == 200 and len(r.content) > 500:
-                img_path = f"downloads/{uuid.uuid4()}.jpg"
-                with open(img_path, "wb") as f:
-                    f.write(r.content)
-                saved_images.append(img_path)
-        except Exception:
-            continue
-
-    audio_path = None
-    if music_url and saved_images:
-        try:
-            ar = fetcher.get(music_url, headers=HEADERS, timeout=20)
-            if ar.status_code == 200 and len(ar.content) > 1000:
-                audio_path = f"downloads/{uuid.uuid4()}.mp3"
-                with open(audio_path, "wb") as f:
-                    f.write(ar.content)
-        except Exception:
-            audio_path = None
-
-    return saved_images, audio_path
-
-
-def get_tiktok_slideshow(url: str) -> tuple[list[str], str | None]:
-    """Каскад из мобильного API и запасных методов для скачивания фото из TikTok."""
-    clean_url = clean_tiktok_url(url)
-    aweme_id = extract_tiktok_id(clean_url)
-
-    # Способ 1: Официальный мобильный API TikTok по ID поста
-    if aweme_id:
-        try:
-            mobile_headers = {
-                "User-Agent": "com.zhiliaoapp.musically/2023501030 (Linux; U; Android 13; en_US; Pixel 7; Build/TQ3A.230805.001; Cronet/58.0.2991.0)",
-            }
-            api_url = f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id={aweme_id}"
-            r = requests.get(api_url, headers=mobile_headers, timeout=15)
-            if r.status_code == 200 and r.text.strip().startswith("{"):
-                aweme_list = r.json().get("aweme_list", [])
-                for item in aweme_list:
-                    if str(item.get("aweme_id")) == str(aweme_id):
-                        images_data = item.get("image_post_info", {}).get("images", [])
-                        img_urls = []
-                        for img_obj in images_data:
-                            url_list = img_obj.get("display_image", {}).get("url_list", [])
-                            if url_list:
-                                img_urls.append(url_list[0])
-                        if img_urls:
-                            music_urls = item.get("music", {}).get("play_url", {}).get("url_list", [])
-                            music_url = music_urls[0] if music_urls else None
-                            return save_media_list(img_urls, music_url)
-        except Exception:
-            pass
-
-    # Способ 2: TikWM API
-    try:
-        tikwm_headers = {
-            **HEADERS,
-            "Referer": "https://www.tikwm.com/",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-        }
-        r = requests.get("https://www.tikwm.com/api/", params={"url": clean_url, "hd": 1}, headers=tikwm_headers, timeout=15)
-        if r.status_code == 200 and r.text.strip().startswith("{"):
-            data = r.json().get("data", {})
-            images = data.get("images")
-            if images:
-                return save_media_list(images, data.get("music"))
-    except Exception:
-        pass
-
-    # Способ 3: Прямой парсинг HTML
-    try:
-        session = requests.Session()
-        resp = session.get(clean_url, headers=HEADERS, allow_redirects=True, timeout=20)
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        script = soup.find("script", id="__UNIVERSAL_DATA_FOR_REHYDRATION__")
-        if script and script.string:
-            raw_data = json.loads(script.string)
-            default_scope = raw_data.get("__DEFAULT_SCOPE__", {})
-            video_detail = default_scope.get("webapp.video-detail", {})
-            item_struct = video_detail.get("itemInfo", {}).get("itemStruct", {})
-
-            images_list = item_struct.get("imagePost", {}).get("images", [])
-            img_urls = []
-            for img_obj in images_list:
-                urls = img_obj.get("imageURL", {}).get("urlList", [])
-                if urls:
-                    img_urls.append(urls[0])
-
-            if img_urls:
-                music_url = item_struct.get("music", {}).get("playUrl")
-                return save_media_list(img_urls, music_url, session=session)
-    except Exception:
-        pass
-
-    return [], None
-
-
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     await message.answer(
         "Привет! Скинь мне ссылку из:\n"
-        "• **TikTok** — видео без водяного знака, фото и альбомы с музыкой\n"
+        "• **TikTok** — видео без водяного знака\n"
         "• **Pinterest** — видео-пины и картинки в оригинале\n"
         "• **Instagram** — Reels и видеопосты",
         parse_mode="Markdown"
@@ -247,30 +123,8 @@ async def handle_link(message: types.Message):
         lower_url = url.lower()
 
         if "tiktok.com" in lower_url:
-            images, audio = await asyncio.to_thread(get_tiktok_slideshow, url)
-            if images:
-                files_to_clean.extend(images)
-                if audio:
-                    files_to_clean.append(audio)
-
-                for i in range(0, len(images), 10):
-                    chunk = images[i:i + 10]
-                    if len(chunk) == 1:
-                        await message.answer_photo(photo=types.FSInputFile(chunk[0]))
-                    else:
-                        album = MediaGroupBuilder()
-                        for img_path in chunk:
-                            album.add_photo(media=types.FSInputFile(img_path))
-                        await message.answer_media_group(media=album.build())
-
-                if audio:
-                    await message.answer_audio(audio=types.FSInputFile(audio), title="Звук из TikTok")
-
-                await status_msg.delete()
-                return
-
             if "/photo/" in lower_url:
-                await status_msg.edit_text("❌ Не удалось вытащить фото из этого поста TikTok (возможно, пост приватный или защищён).")
+                await status_msg.edit_text("❌ TikTok защитил фото-посты от скачивания с облачных серверов. Закидывай видео — их качает на ура!")
                 return
 
             video_path = await asyncio.to_thread(download_video_ytdlp, clean_tiktok_url(url))
